@@ -17,6 +17,7 @@
 package com.android.music;
 
 import android.app.Notification;
+import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.appwidget.AppWidgetManager;
@@ -50,6 +51,7 @@ import android.os.SystemClock;
 import android.os.PowerManager.WakeLock;
 import android.provider.MediaStore;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.widget.RemoteViews;
 import android.widget.Toast;
 
@@ -94,6 +96,7 @@ public class MediaPlaybackService extends Service {
     public static final String CMDPLAY = "play";
     public static final String CMDPREVIOUS = "previous";
     public static final String CMDNEXT = "next";
+    public static final String CMDNOTIF = "buttonId";
 
     public static final String TOGGLEPAUSE_ACTION = "com.android.music.musicservicecommand.togglepause";
     public static final String PAUSE_ACTION = "com.android.music.musicservicecommand.pause";
@@ -108,7 +111,8 @@ public class MediaPlaybackService extends Service {
     private static final int FADEUP = 6;
     private static final int TRACK_WENT_TO_NEXT = 7;
     private static final int MAX_HISTORY_SIZE = 100;
-    
+
+    private Notification status;    
     private MultiPlayer mPlayer;
     private String mFileToPlay;
     private int mShuffleMode = SHUFFLE_NONE;
@@ -670,6 +674,9 @@ public class MediaPlaybackService extends Service {
                 play();
             } else if (CMDSTOP.equals(cmd)) {
                 pause();
+                if (intent.getIntExtra(CMDNOTIF, 0) == 3) {
+                    stopForeground(true);
+                }
                 mPausedByTransientLossOfFocus = false;
                 seek(0);
             }
@@ -809,7 +816,7 @@ public class MediaPlaybackService extends Service {
             ed.putString(MediaMetadataRetriever.METADATA_KEY_ALBUM, getAlbumName());
             ed.putString(MediaMetadataRetriever.METADATA_KEY_ARTIST, getArtistName());
             ed.putLong(MediaMetadataRetriever.METADATA_KEY_DURATION, duration());
-            Bitmap b = MusicUtils.getArtwork(this, getAudioId(), getAlbumId(), false);
+            Bitmap b = MusicUtils.getArtwork(this, getAudioId(), getAlbumId(), true);
             if (b != null) {
                 ed.putBitmap(MetadataEditor.BITMAP_KEY_ARTWORK, b);
             }
@@ -1189,7 +1196,29 @@ public class MediaPlaybackService extends Service {
 
     private void updateNotification() {
         RemoteViews views = new RemoteViews(getPackageName(), R.layout.statusbar);
-        views.setImageViewResource(R.id.icon, R.drawable.stat_notify_musicplayer);
+            views.setImageViewBitmap(R.id.albumArt, MusicUtils.getArtwork(this, getAudioId(), getAlbumId(), true));
+            ComponentName rec = new ComponentName(getPackageName(), MediaButtonIntentReceiver.class.getName());
+            Intent mediaButtonIntent = new Intent(Intent.ACTION_MEDIA_BUTTON);
+            mediaButtonIntent.putExtra(CMDNOTIF, 1);
+            mediaButtonIntent.setComponent(rec);
+            KeyEvent mediaKey = new KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);
+            mediaButtonIntent.putExtra(Intent.EXTRA_KEY_EVENT, mediaKey);
+            PendingIntent mediaPendingIntent = PendingIntent.getBroadcast(getApplicationContext(),
+                    1, mediaButtonIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+            views.setOnClickPendingIntent(R.id.play, mediaPendingIntent);
+            mediaButtonIntent.putExtra(CMDNOTIF, 2);
+            mediaKey = new KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_MEDIA_NEXT);
+            mediaButtonIntent.putExtra(Intent.EXTRA_KEY_EVENT, mediaKey);
+            mediaPendingIntent = PendingIntent.getBroadcast(getApplicationContext(),
+                    2, mediaButtonIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+            views.setOnClickPendingIntent(R.id.skip, mediaPendingIntent);
+            mediaButtonIntent.putExtra(CMDNOTIF, 3);
+            mediaKey = new KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_MEDIA_STOP);
+            mediaButtonIntent.putExtra(Intent.EXTRA_KEY_EVENT, mediaKey);
+            mediaPendingIntent = PendingIntent.getBroadcast(getApplicationContext(),
+                    3, mediaButtonIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+            views.setOnClickPendingIntent(R.id.close, mediaPendingIntent);
+            views.setImageViewResource(R.id.play, R.drawable.ic_appwidget_music_pause);
         if (getAudioId() < 0) {
             // streaming
             views.setTextViewText(R.id.trackname, getPath());
@@ -1209,7 +1238,7 @@ public class MediaPlaybackService extends Service {
                     getString(R.string.notification_artist_album, artist, album)
                     );
         }
-        Notification status = new Notification();
+        status = new Notification();
         status.contentView = views;
         status.flags |= Notification.FLAG_ONGOING_EVENT;
         status.icon = R.drawable.stat_notify_musicplayer;
@@ -1435,7 +1464,11 @@ public class MediaPlaybackService extends Service {
         mDelayedStopHandler.removeCallbacksAndMessages(null);
         Message msg = mDelayedStopHandler.obtainMessage();
         mDelayedStopHandler.sendMessageDelayed(msg, IDLE_DELAY);
-        stopForeground(true);
+        stopForeground(false);
+        status.contentView.setImageViewResource(R.id.play, isPlaying() ?
+                R.drawable.ic_appwidget_music_play : R.drawable.ic_appwidget_music_pause);
+        NotificationManager mManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        mManager.notify(PLAYBACKSERVICE_STATUS, status);
     }
     
     private void saveBookmarkIfNeeded() {
